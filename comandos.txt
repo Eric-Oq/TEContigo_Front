@@ -1,0 +1,8 @@
+Para iniciar el server
+- npx expo start 
+
+Para iniciar el server nuevamente, pero sin caché
+- npx expo start -c
+
+Para detener el server
+- Ctrl + c
