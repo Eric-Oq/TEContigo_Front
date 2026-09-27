@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert } from 'react-native';
+import {Feather} from '@expo/vector-icons';
 import { useAuth } from './AuthContext';
+import {useColorScheme} from 'nativewind'; // Importamos useColorScheme de NativeWind
+
 
 // Añadimos la interfaz para recibir la función de navegación
 interface LoginScreenProps {
@@ -12,6 +15,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onNavigateToRegister }
   const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { login } = useAuth();
+  const {colorScheme,toggleColorScheme} = useColorScheme();
+
+  const toggleDarkMode = () => {
+    toggleColorScheme(); 
+  };
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -32,14 +40,43 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onNavigateToRegister }
   };
 
   return (
-    <View className="flex-1 bg-gray-50 justify-center px-6">
-      <Text className="text-3xl font-bold text-blue-900 mb-2 text-center">Avisos TEC</Text>
-      <Text className="text-base text-gray-500 mb-8 text-center">Inicia sesión con tu correo institucional</Text>
+    <View className="flex-1 bg-gray-50 dark:bg-gray-900 justify-center px-6">
+      <TouchableOpacity 
+        className="absolute bottom-16 left-36 flex-row items-center justify-between bg-gray-200 dark:bg-black rounded-full px-2 py-2 w-40 mb-6 border border-gray-300 dark:border-gray-800" 
+        onPress={toggleDarkMode}
+        activeOpacity={0.8}
+      >
+        {colorScheme === 'dark' ? (
+          /* --- Diseño NIGHT MODE --- */
+          /* Ícono de luna a la izquierda en un círculo blanco, texto a la derecha */
+          <>
+            <View className="bg-white rounded-full p-2">
+              <Feather name="moon" size={20} color="black" />
+            </View>
+            <Text className="text-white font-bold text-sm flex-2 text-center pr-2">
+              NIGHT MODE
+            </Text>
+          </>
+        ) : (
+          /* --- Diseño DAY MODE --- */
+          /* Texto a la izquierda, ícono de sol a la derecha en un círculo blanco */
+          <>
+            <Text className="text-black font-bold text-sm flex-1 text-center pl-2">
+              DAY MODE
+            </Text>
+            <View className="bg-white rounded-full p-2 shadow-sm border border-gray-300">
+              <Feather name="sun" size={20} color="black" />
+            </View>
+          </>
+        )}
+      </TouchableOpacity>
+      <Text className="title1">Avisos TEC</Text>
+      <Text className="title2">Inicia sesión con tu correo institucional</Text>
 
       <View className="mb-4">
-        <Text className="text-sm font-semibold text-gray-700 mb-1">Correo Electrónico</Text>
+        <Text className="title3">Correo Electrónico</Text>
         <TextInput
-          className="bg-white border border-gray-300 rounded-lg p-4 text-base"
+          className="bg-white border border-gray-300  dark:bg-gray-800 rounded-lg p-4 text-base"
           placeholder="ejemplo@tec.mx"
           keyboardType="email-address"
           autoCapitalize="none"
@@ -50,9 +87,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onNavigateToRegister }
       </View>
 
       <View className="mb-6">
-        <Text className="text-sm font-semibold text-gray-700 mb-1">Contraseña</Text>
+        <Text className="title3">Contraseña</Text>
         <TextInput
-          className="bg-white border border-gray-300 rounded-lg p-4 text-base"
+          className="bg-white border border-gray-300  dark:bg-gray-800 rounded-lg p-4 text-base"
           placeholder="********"
           secureTextEntry
           value={password}
