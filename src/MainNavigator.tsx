@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, SafeAreaView } from 'react-native';
 import { ReportCard } from './ReportCard';
 import { useAuth } from './AuthContext';
+import {useColorScheme} from 'nativewind'; // Importamos useColorScheme de NativeWind
+import {Feather} from '@expo/vector-icons';
+
 
 // Dummy data para Avisos
 const mockAvisos = [
@@ -35,16 +38,21 @@ const mockChats = [
   { id: 2, user: "Carlos (Soporte)", lastMessage: "¿Podrías confirmar si el proyector ya funciona?", time: "Ayer" }
 ];
 
+
 export const MainNavigator = () => {
   const [activeTab, setActiveTab] = useState('Avisos');
   const { currentUser, logout } = useAuth(); // Importamos los datos del usuario actual y la función de salir[cite: 1]
 
   const tabs = ['Avisos', 'Objetos', 'Chats', 'Perfil'];
+  const {colorScheme,toggleColorScheme} = useColorScheme();
+
+  const toggleDarkMode = () => {
+    toggleColorScheme(); 
+  };
 
   return (
-    <View className="flex-1 bg-gray-50">
+    <View className="flex-1 ">
       {/* Contenido principal scrolleable */}
-    
     <ScrollView 
           className="flex-1"
           contentContainerStyle={{ 
@@ -53,7 +61,20 @@ export const MainNavigator = () => {
             paddingBottom: 40 
           }}
         >
-    <Text className="text-3xl font-bold text-gray-900 mb-6">{activeTab}</Text>
+
+          {/* Podrías usar un Text con estilos dinámicos para cambiar el color según la pestaña activa
+            <Text 
+              className={`text-3xl font-bold mb-6 dark:text-white ${
+                activeTab === 'Perfil' ? 'text-[#1B396A]' : 
+                activeTab === 'Chats' ? 'text-green-600' : 
+                activeTab === 'Objetos' ? 'text-orange-500' : 
+                'text-gray-900' // Color por defecto para 'Avisos'
+              }`}
+            >
+              {activeTab}
+            </Text>
+          */}
+    <Text className="mb-6 mt-3 title1">{activeTab}</Text>
 
         {/* Pestaña: AVISOS */}
         {activeTab === 'Avisos' && (
@@ -105,35 +126,64 @@ export const MainNavigator = () => {
         )}
 
         {/* Pestaña: PERFIL */}
-        {activeTab === 'Perfil' && (
-          <View className="bg-white rounded-xl p-6 border border-gray-100 shadow-sm items-center">
-            {/* Avatar genérico */}
-            <View className="w-24 h-24 bg-blue-600 rounded-full items-center justify-center mb-4">
-              <Text className="text-white text-3xl font-bold">
-                {currentUser?.email?.charAt(0).toUpperCase() || 'U'}
-              </Text>
-            </View>
-            
-            {/* Información del usuario conectada al Context API */}
-            <Text className="text-xl font-bold text-gray-900 mb-1">{currentUser?.email}</Text>
-            <Text className="text-blue-600 font-semibold mb-8">Rol de cuenta: {currentUser?.role}</Text>
+          {activeTab === 'Perfil' && (
+            <View className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-100 dark:border-gray-700 shadow-sm items-center">
+              
+              {/* Avatar genérico */}
+              <View className="w-24 h-24 bg-blue-600 rounded-full items-center justify-center mb-4 mt-2">
+                <Text className="text-white text-3xl font-bold">
+                  {currentUser?.email?.charAt(0).toUpperCase() || 'U'}
+                </Text>
+              </View>
+              
+              {/* Información del usuario */}
+              <Text className="text-xl font-bold text-gray-900 dark:text-white mb-1">{currentUser?.email}</Text>
+              <Text className="text-blue-600 dark:text-blue-400 font-semibold mb-6">Rol de cuenta: {currentUser?.role}</Text>
 
-            <TouchableOpacity 
-              className="bg-red-50 border border-red-200 py-3 px-8 rounded-lg w-full items-center"
-              onPress={logout}
-              accessibilityRole="button"
-            >
-              <Text className="text-red-600 font-bold text-base">Cerrar Sesión</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-        
-        {/* Espaciado al final para que el último elemento no quede detrás de la barra inferior */}
+              {/* Botón de Modo Oscuro */}
+              <TouchableOpacity 
+                className="flex-row items-center justify-between bg-gray-200 dark:bg-black rounded-full px-2 py-2 w-40 mb-8 border border-gray-300 dark:border-gray-800" 
+                onPress={toggleColorScheme}
+                activeOpacity={0.8}
+              >
+                {colorScheme === 'dark' ? (
+                  <>
+                    <View className="bg-white rounded-full p-2">
+                      <Feather name="moon" size={20} color="black" />
+                    </View>
+                    <Text className="text-white font-bold text-sm flex-1 text-center pr-2">
+                      NIGHT MODE
+                    </Text>
+                  </>
+                ) : (
+                  <>
+                    <Text className="text-black font-bold text-sm flex-1 text-center pl-2">
+                      DAY MODE
+                    </Text>
+                    <View className="bg-white rounded-full p-2 shadow-sm border border-gray-300">
+                      <Feather name="sun" size={20} color="black" />
+                    </View>
+                  </>
+                )}
+              </TouchableOpacity>
+
+              {/* Botón de Cerrar Sesión */}
+              <TouchableOpacity 
+                className="bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 py-3 px-8 rounded-lg w-full items-center"
+                onPress={logout}
+                accessibilityRole="button"
+              >
+                <Text className="text-red-600 dark:text-red-400 font-bold text-base">Cerrar Sesión</Text>
+              </TouchableOpacity>
+
+            </View>
+          )}
+
         <View className="h-10" />
       </ScrollView>
 
       {/* Barra de navegación inferior */}
-      <View className="flex-row bg-white border-t border-gray-200 pb-5 pt-3">
+      <View className="flex-row bg-white border-t border-gray-200 dark:bg-gray-800 dark:border-gray-600 pb-5 pt-3">
         {tabs.map((tab) => (
           <TouchableOpacity
             key={tab}

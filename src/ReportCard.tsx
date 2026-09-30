@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, Image } from 'react-native';
+import { View, Text, TouchableOpacity, Image} from 'react-native';
 import { useAuth } from './AuthContext';
 
 // Interfaz basada en la tabla Reports de PostgreSQL
@@ -30,17 +30,23 @@ export const ReportCard: React.FC<ReportCardProps> = ({ report }) => {
   const canChangeStatus = isAdmin || isModerator;
 
   // Colores dinámicos para el estado (Jerarquía visual y Claridad)
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'PUBLICADO': return 'bg-yellow-100 text-yellow-800';
-      case 'EN_PROCESO': return 'bg-blue-100 text-blue-800';
-      case 'TERMINADO': return 'bg-green-100 text-green-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
+  const getStatusStyle = (status: string) => {
+      switch (status) {
+        case 'PUBLICADO': 
+          return { bg: 'bg-publicado', text: 'text-publicado' };
+        case 'EN_PROCESO': 
+          return { bg: 'bg-proceso', text: 'text-proceso' };
+        case 'TERMINADO': 
+          return { bg: 'bg-terminado', text: 'text-terminado' }; 
+        default: 
+          return { bg: 'bg-red-800', text: 'text-black font-bold' };
+      }
+    };
+
+  const statusStyles = getStatusStyle(report.status);
 
   return (
-    <View className="bg-white rounded-xl shadow-sm mb-4 border border-gray-100 overflow-hidden">
+    <View className=" reportcard rounded-xl shadow-sm mb-4 border border-gray-100 overflow-hidden">
       {/* Optimización de datos: Carga perezosa de imagen si existe */}
       {report.photoPath && (
         <Image 
@@ -54,8 +60,8 @@ export const ReportCard: React.FC<ReportCardProps> = ({ report }) => {
       <View className="p-4">
         <View className="flex-row justify-between items-start mb-2">
           <Text className="text-lg font-bold text-gray-900 flex-1">{report.name}</Text>
-          <View className={`px-2 py-1 rounded-full ${getStatusColor(report.status)}`}>
-            <Text className="text-xs font-semibold">{report.status}</Text>
+          <View className={`px-2 py-1 rounded-full ${statusStyles.bg}`}>
+            <Text className={`text-xs font-semibold ${statusStyles.text}`}>{report.status}</Text>
           </View>
         </View>
 

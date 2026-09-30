@@ -4,6 +4,7 @@ import { AuthProvider, useAuth } from './src/AuthContext';
 import { LoginScreen } from './src/LoginScreen';
 import { RegisterScreen } from './src/RegisterScreen';
 import { MainNavigator } from './src/MainNavigator';
+import { View } from 'react-native';
 
 const RootNavigator = () => {
   const { currentUser } = useAuth();
@@ -26,7 +27,10 @@ const RootNavigator = () => {
 export default function App() {
   return (
     <AuthProvider>
-      <RootNavigator />
+      {/* Contenedor global: Fondo claro por defecto, gris oscuro de noche */}
+      <View className="flex-1 bg-gray-50 dark:bg-gray-900">
+        <RootNavigator />
+      </View>
     </AuthProvider>
   );
 }
