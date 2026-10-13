@@ -1,27 +1,48 @@
 import './global.css';
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './src/AuthContext';
-import { LoginScreen } from './src/LoginScreen';
-import { RegisterScreen } from './src/RegisterScreen';
 import { MainNavigator } from './src/MainNavigator';
+import { RegisterScreen } from './src/modules/auth/RegisterScreen';
+import { VerifyEmailScreen } from './src/modules/auth/VerifyEmailScreen';
+import { LoginScreen } from './src/modules/auth/LoginScreen';
 
-const RootNavigator = () => {
-  const { currentUser } = useAuth();
-  // Estado para saber qué pantalla mostrar si no hay usuario
-  const [isLoginView, setIsLoginView] = useState(true);
-  
-  // Si existe un usuario activo, muestra la app principal
-  if (currentUser) {
+type AuthScreen =
+  | { name: 'login' }
+  | { name: 'register' }
+  | { name: 'verifyEmail'; email: string };
+
+function RootNavigator() {
+  const [screen, setScreen] = useState<AuthScreen>({ name: 'login' });
+  const { isAuthenticated } = useAuth();
+
+  if (isAuthenticated) {
     return <MainNavigator />;
   }
 
-  // Si no hay usuario, alterna entre Login y Registro
-  return isLoginView ? (
-    <LoginScreen onNavigateToRegister={() => setIsLoginView(false)} />
-  ) : (
-    <RegisterScreen onNavigateToLogin={() => setIsLoginView(true)} />
-  );
-};
+  switch (screen.name) {
+    case 'register':
+      return (
+        <RegisterScreen
+          onNavigateToLogin={() => setScreen({ name: 'login' })}
+          onRegistered={(email) => setScreen({ name: 'verifyEmail', email })}
+        />
+      );
+
+    case 'verifyEmail':
+      return (
+        <VerifyEmailScreen
+          email={screen.email}
+          onVerified={() => setScreen({ name: 'login' })}
+          onBack={() => setScreen({ name: 'register' })}
+        />
+      );
+
+    default:
+      return (
+        <LoginScreen onNavigateToRegister={() => setScreen({ name: 'register' })} />
+      );
+  }
+}
 
 export default function App() {
   return (
