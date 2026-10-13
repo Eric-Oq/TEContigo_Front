@@ -1,27 +1,11 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, SafeAreaView } from 'react-native';
-import { ReportCard } from './ReportCard';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import { reportsApi } from './api/reports/reportsApi';
+import type { Report, ReportFields } from './api/reports/reportsApi';
+import { ReportCard } from './modules/reports/ReportCard';
+import { ReportFormModal } from './modules/reports/ReportFormModal';
+import { ReportStatusModal } from './modules/reports/ReportStatusModal';
 import { useAuth } from './AuthContext';
-
-// Dummy data para Avisos
-const mockAvisos = [
-  {
-    id: 1,
-    userId: 2, 
-    name: "Fuga de agua en el edificio A",
-    category: "Mantenimiento",
-    status: "PUBLICADO" as const,
-    description: "Hay una fuga importante en los baños del segundo piso del edificio A. El agua está llegando al pasillo.",
-  },
-  {
-    id: 2,
-    userId: 1, 
-    name: "Proyector dañado en aula 103",
-    category: "Equipo",
-    status: "EN_PROCESO" as const,
-    description: "El proyector no enciende, el cable HDMI parece estar trozado. Ya se avisó a soporte.",
-  }
-];
 
 // Dummy data para Objetos Perdidos/Encontrados
 const mockObjetos = [
@@ -37,9 +21,143 @@ const mockChats = [
 
 export const MainNavigator = () => {
   const [activeTab, setActiveTab] = useState('Avisos');
-  const { currentUser, logout } = useAuth(); // Importamos los datos del usuario actual y la función de salir[cite: 1]
+  const { accessToken, currentUser, logout } = useAuth();
+  const [reports, setReports] = useState<Report[]>([]);
+  const [isLoadingReports, setIsLoadingReports] = useState(true);
+  const [isLoadingMoreReports, setIsLoadingMoreReports] = useState(false);
+  const [hasMoreReports, setHasMoreReports] = useState(false);
+  const [reportPageNumber, setReportPageNumber] = useState(1);
+  const [reportsError, setReportsError] = useState<string | null>(null);
+  const [isReportFormVisible, setIsReportFormVisible] = useState(false);
+  const [reportBeingEdited, setReportBeingEdited] = useState<Report | null>(null);
+  const [reportChangingStatus, setReportChangingStatus] = useState<Report | null>(null);
 
   const tabs = ['Avisos', 'Objetos', 'Chats', 'Perfil'];
+
+  const loadReports = useCallback(async (pageNumber = 1, append = false) => {
+    if (!accessToken) {
+      setReports([]);
+      setIsLoadingReports(false);
+      setIsLoadingMoreReports(false);
+      setHasMoreReports(false);
+      return;
+    }
+
+    if (append) {
+      setIsLoadingMoreReports(true);
+    } else {
+      setIsLoadingReports(true);
+    }
+    setReportsError(null);
+    try {
+      const page = await reportsApi.list(accessToken, pageNumber);
+      setReports((current) => (append ? [...current, ...page.items] : page.items));
+      setReportPageNumber(page.pageNumber);
+      setHasMoreReports(page.pageNumber < page.totalPages);
+    } catch (error) {
+      setReportsError(
+        error instanceof Error ? error.message : 'No se pudieron cargar los reportes.'
+      );
+    } finally {
+      if (append) {
+        setIsLoadingMoreReports(false);
+      } else {
+        setIsLoadingReports(false);
+      }
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    void loadReports();
+  }, [loadReports]);
+
+  const showRequestError = (error: unknown) => {
+    Alert.alert(
+      'No se pudo completar la operación',
+      error instanceof Error ? error.message : 'Inténtalo de nuevo.'
+    );
+  };
+
+  const handleSaveReport = async (fields: ReportFields) => {
+    if (!accessToken) {
+      showRequestError(new Error('Inicia sesión para administrar reportes.'));
+      return;
+    }
+
+    try {
+      if (reportBeingEdited) {
+        await reportsApi.update(reportBeingEdited.id, fields, accessToken);
+      } else {
+        await reportsApi.create(fields, accessToken);
+      }
+      setIsReportFormVisible(false);
+      setReportBeingEdited(null);
+      await loadReports();
+    } catch (error) {
+      showRequestError(error);
+    }
+  };
+
+  const handleDeleteReport = (report: Report) => {
+    Alert.alert('Eliminar reporte', `¿Deseas eliminar "${report.name}"?`, [
+      { text: 'Cancelar', style: 'cancel' },
+      {
+        text: 'Eliminar',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            if (!accessToken) {
+              showRequestError(new Error('Inicia sesión para administrar reportes.'));
+              return;
+            }
+            try {
+              await reportsApi.delete(report.id, accessToken);
+              await loadReports();
+            } catch (error) {
+              showRequestError(error);
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
+  const handleChangeStatus = async (status: string) => {
+    if (!reportChangingStatus) return;
+    if (!accessToken) {
+      showRequestError(new Error('Inicia sesión para administrar reportes.'));
+      return;
+    }
+    try {
+      await reportsApi.update(reportChangingStatus.id, { status }, accessToken);
+      setReportChangingStatus(null);
+      await loadReports();
+    } catch (error) {
+      showRequestError(error);
+    }
+  };
+
+  const openCreateForm = () => {
+    setReportBeingEdited(null);
+    setIsReportFormVisible(true);
+  };
+
+  const openEditForm = (report: Report) => {
+    setReportBeingEdited(report);
+    setIsReportFormVisible(true);
+  };
+
+  const handleLogout = async () => {
+    try {
+      await logout();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'No se pudo cerrar la sesión en el servidor.';
+      Alert.alert('Sesión cerrada localmente', message);
+    }
+  };
 
   return (
     <View className="flex-1 bg-gray-50">
@@ -58,9 +176,64 @@ export const MainNavigator = () => {
         {/* Pestaña: AVISOS */}
         {activeTab === 'Avisos' && (
           <View>
-            {mockAvisos.map(aviso => (
-              <ReportCard key={aviso.id} report={aviso} />
-            ))}
+            <TouchableOpacity
+              className="mb-5 self-start rounded-lg bg-blue-600 px-4 py-3"
+              onPress={openCreateForm}
+              accessibilityRole="button"
+            >
+              <Text className="font-bold text-white">Crear reporte</Text>
+            </TouchableOpacity>
+
+            {isLoadingReports ? (
+              <ActivityIndicator className="my-8" size="large" color="#2563eb" />
+            ) : reportsError ? (
+              <View className="rounded-xl border border-red-200 bg-red-50 p-4">
+                <Text className="mb-3 text-red-700">{reportsError}</Text>
+                <TouchableOpacity onPress={() => void loadReports()} accessibilityRole="button">
+                  <Text className="font-bold text-blue-700">Reintentar</Text>
+                </TouchableOpacity>
+              </View>
+            ) : reports.length === 0 ? (
+              <Text className="py-8 text-center text-gray-500">
+                Todavía no hay reportes publicados.
+              </Text>
+            ) : (
+              <>
+                {reportsError && (
+                  <View className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4">
+                    <Text className="mb-3 text-red-700">{reportsError}</Text>
+                    <TouchableOpacity
+                      onPress={() => void loadReports(reportPageNumber + 1, true)}
+                      disabled={isLoadingMoreReports}
+                      accessibilityRole="button"
+                    >
+                      <Text className="font-bold text-blue-700">Reintentar</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+                {reports.map((report) => (
+                  <ReportCard
+                    key={String(report.id)}
+                    report={report}
+                    onEdit={openEditForm}
+                    onDelete={handleDeleteReport}
+                    onChangeStatus={setReportChangingStatus}
+                  />
+                ))}
+                {hasMoreReports && (
+                  <TouchableOpacity
+                    className="mb-4 items-center rounded-lg border border-blue-200 py-3"
+                    onPress={() => void loadReports(reportPageNumber + 1, true)}
+                    disabled={isLoadingMoreReports}
+                    accessibilityRole="button"
+                  >
+                    <Text className="font-semibold text-blue-700">
+                      {isLoadingMoreReports ? 'Cargando...' : 'Cargar más reportes'}
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
           </View>
         )}
 
@@ -120,7 +293,7 @@ export const MainNavigator = () => {
 
             <TouchableOpacity 
               className="bg-red-50 border border-red-200 py-3 px-8 rounded-lg w-full items-center"
-              onPress={logout}
+              onPress={handleLogout}
               accessibilityRole="button"
             >
               <Text className="text-red-600 font-bold text-base">Cerrar Sesión</Text>
@@ -148,6 +321,22 @@ export const MainNavigator = () => {
           </TouchableOpacity>
         ))}
       </View>
+
+      <ReportFormModal
+        visible={isReportFormVisible}
+        report={reportBeingEdited}
+        onCancel={() => {
+          setIsReportFormVisible(false);
+          setReportBeingEdited(null);
+        }}
+        onSubmit={handleSaveReport}
+      />
+      <ReportStatusModal
+        visible={reportChangingStatus !== null}
+        currentStatus={reportChangingStatus?.status ?? null}
+        onCancel={() => setReportChangingStatus(null)}
+        onSelect={(status) => void handleChangeStatus(status)}
+      />
     </View>
   );
 };
