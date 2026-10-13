@@ -25,7 +25,7 @@
 }
 
 .text-publicado {
-  @apply font-bold text-gray-500;
+  @apply font-bold text-black;
 }
 
 .bg-proceso {
@@ -33,11 +33,11 @@
 }
 
 .text-proceso {
-  @apply font-bold text-gray-500;
+  @apply font-bold text-black;
 }
 
 .reportcard {
-  @apply bg-[#d9dae4];;
+  @apply bg-[#d9dae4] dark:bg-gray-800 rounded-lg shadow-md p-4 mb-4;
 }
 
 /*Pendiente por probar*/

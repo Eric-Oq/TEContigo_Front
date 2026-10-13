@@ -46,7 +46,7 @@ export const ReportCard: React.FC<ReportCardProps> = ({ report }) => {
   const statusStyles = getStatusStyle(report.status);
 
   return (
-    <View className=" reportcard rounded-xl shadow-sm mb-4 border border-gray-100 overflow-hidden">
+    <View className=" reportcard rounded-xl shadow-sm mb-4 border border-gray-300 overflow-hidden">
       {/* Optimización de datos: Carga perezosa de imagen si existe */}
       {report.photoPath && (
         <Image 
@@ -57,36 +57,51 @@ export const ReportCard: React.FC<ReportCardProps> = ({ report }) => {
         />
       )}
       
+      {/*Pastillas de estados PUBLICADO, EN_PROCESO, TERMINADO y Titulo del reporte*/}
       <View className="p-4">
         <View className="flex-row justify-between items-start mb-2">
-          <Text className="text-lg font-bold text-gray-900 flex-1">{report.name}</Text>
-          <View className={`px-2 py-1 rounded-full ${statusStyles.bg}`}>
+          <Text className="text-lg font-bold text-gray-900 dark:text-white flex-1 mr-4">{report.name}</Text>
+          <View className={`px-2 py-1 ml-2 rounded-full ${statusStyles.bg}`}>
             <Text className={`text-xs font-semibold ${statusStyles.text}`}>{report.status}</Text>
           </View>
         </View>
 
-        <Text className="text-sm text-blue-600 font-medium mb-2">{report.category}</Text>
-        <Text className="text-gray-600 text-base mb-4" numberOfLines={3}>
+      {/* Categoría y descripción del reporte */}
+        <Text className="text-sm text-gray-500 dark:text-white font-medium mb-2">{report.category}</Text>
+        <Text className="text-gray-600 dark:text-white text-base mb-4" numberOfLines={3}>
           {report.description}
         </Text>
 
-        {/* Botones de acción condicionales basados en roles */}
-        <View className="flex-row border-t border-gray-100 pt-3 gap-x-8">
+      {/* Botones de acción condicionales basados en roles */}
+        <View className="flex-row border-t border-gray-300 dark:border-white pt-4 gap-x-3">
+          
           {canEdit && (
-            <TouchableOpacity accessibilityRole="button" className="py-2">
-              <Text className="text-blue-600 font-semibold">Editar</Text>
+            <TouchableOpacity 
+              accessibilityRole="button" 
+              className="bg-blue-100 dark:bg-blue-500 px-4 py-1.5 rounded-full items-center justify-center border border-blue-200 dark:border-blue-800"
+            >
+              <Text className="text-blue-700 dark:text-white font-semibold text-sm">Editar</Text>
             </TouchableOpacity>
           )}
+
           {canDelete && (
-            <TouchableOpacity accessibilityRole="button" className="py-2">
-              <Text className="text-red-600 font-semibold">Eliminar</Text>
+            <TouchableOpacity 
+              accessibilityRole="button" 
+              className="bg-red-100 dark:bg-red-500 px-4 py-1.5 rounded-full items-center justify-center border border-red-200 dark:border-red-800"
+            >
+              <Text className="text-red-700 dark:text-white font-semibold text-sm">Eliminar</Text>
             </TouchableOpacity>
           )}
+
           {canChangeStatus && (
-            <TouchableOpacity accessibilityRole="button" className="py-2">
-              <Text className="text-purple-600 font-semibold">Cambiar Estado</Text>
+            <TouchableOpacity 
+              accessibilityRole="button" 
+              className="bg-purple-100 dark:bg-purple-900/30 px-4 py-1.5 rounded-full items-center justify-center border border-purple-200 dark:border-purple-800"
+            >
+              <Text className="text-purple-700 dark:text-purple-400 font-semibold text-sm">Cambiar Estado</Text>
             </TouchableOpacity>
           )}
+          
         </View>
       </View>
     </View>
