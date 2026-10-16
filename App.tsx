@@ -1,7 +1,7 @@
 import './global.css';
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './src/AuthContext';
-import { MainNavigator } from './src/MainNavigator';
+import { MainNavigator } from './src/components/MainNavigator';
 import { RegisterScreen } from './src/modules/auth/RegisterScreen';
 import { VerifyEmailScreen } from './src/modules/auth/VerifyEmailScreen';
 import { LoginScreen } from './src/modules/auth/LoginScreen';
