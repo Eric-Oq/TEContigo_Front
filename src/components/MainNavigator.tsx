@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import * as Notifications from 'expo-notifications';
 import { reportsApi } from '../api/reports/reportsApi';
 import type { Report, ReportFields } from '../api/reports/reportsApi';
 import { ReportCard } from '../modules/reports/ReportCard';
@@ -7,12 +8,9 @@ import { ReportFormModal } from '../modules/reports/ReportFormModal';
 import { ReportStatusModal } from '../modules/reports/ReportStatusModal';
 import { useAuth } from '../AuthContext';
 import { ObjectsScreen } from '../modules/objects/ObjectsScreen';
-
-// Dummy data para Chats
-const mockChats = [
-  { id: 1, user: "María López (Admin)", lastMessage: "Ya enviamos a mantenimiento al edificio A.", time: "10:30 AM" },
-  { id: 2, user: "Carlos (Soporte)", lastMessage: "¿Podrías confirmar si el proyector ya funciona?", time: "Ayer" }
-];
+import { ChatsScreen } from '../modules/chats/ChatsScreen';
+import type { PushNotificationTarget } from '../modules/chats/ChatsScreen';
+import { getPushTarget, registerPushDevice } from '../modules/chats/pushNotifications';
 
 export const MainNavigator = () => {
   const [activeTab, setActiveTab] = useState('Avisos');
@@ -26,6 +24,8 @@ export const MainNavigator = () => {
   const [isReportFormVisible, setIsReportFormVisible] = useState(false);
   const [reportBeingEdited, setReportBeingEdited] = useState<Report | null>(null);
   const [reportChangingStatus, setReportChangingStatus] = useState<Report | null>(null);
+  const [pushTarget, setPushTarget] = useState<PushNotificationTarget | null>(null);
+  const [chatsStartAt, setChatsStartAt] = useState<'home' | 'requests'>('home');
 
   const tabs = ['Avisos', 'Objetos', 'Chats', 'Perfil'];
 
@@ -65,6 +65,30 @@ export const MainNavigator = () => {
   useEffect(() => {
     void loadReports();
   }, [loadReports]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+
+    const handleResponse = (response: Notifications.NotificationResponse) => {
+      const target = getPushTarget(response);
+      if (!target) return;
+      setPushTarget(target);
+      setActiveTab('Chats');
+    };
+
+    void registerPushDevice(accessToken).catch((error: unknown) => {
+      Alert.alert(
+        'No se pudo registrar el dispositivo',
+        error instanceof Error ? error.message : 'Inténtalo de nuevo.'
+      );
+    });
+
+    const initialResponse = Notifications.getLastNotificationResponse();
+    if (initialResponse) handleResponse(initialResponse);
+
+    const subscription = Notifications.addNotificationResponseReceivedListener(handleResponse);
+    return () => subscription.remove();
+  }, [accessToken]);
 
   const showRequestError = (error: unknown) => {
     Alert.alert(
@@ -156,9 +180,10 @@ export const MainNavigator = () => {
 
   return (
     <View className="flex-1 bg-gray-50">
-      {/* Contenido principal scrolleable */}
-    
-    <ScrollView 
+      {activeTab === 'Chats' ? (
+        <ChatsScreen pushTarget={pushTarget} startAt={chatsStartAt} />
+      ) : (
+      <ScrollView
           className="flex-1"
           contentContainerStyle={{ 
             paddingHorizontal: 16, 
@@ -234,27 +259,12 @@ export const MainNavigator = () => {
 
         {/* Pestaña: OBJETOS */}
         {activeTab === 'Objetos' && (
-          <ObjectsScreen />
-        )}
-
-        {/* Pestaña: CHATS */}
-        {activeTab === 'Chats' && (
-          <View>
-            {mockChats.map(chat => (
-              <TouchableOpacity key={chat.id} className="bg-white rounded-xl p-4 mb-3 flex-row items-center border border-gray-100 shadow-sm">
-                <View className="w-12 h-12 bg-blue-100 rounded-full items-center justify-center mr-4">
-                  <Text className="text-blue-600 font-bold text-lg">{chat.user.charAt(0)}</Text>
-                </View>
-                <View className="flex-1">
-                  <View className="flex-row justify-between mb-1">
-                    <Text className="font-bold text-gray-900">{chat.user}</Text>
-                    <Text className="text-xs text-gray-500">{chat.time}</Text>
-                  </View>
-                  <Text className="text-gray-600 text-sm" numberOfLines={1}>{chat.lastMessage}</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
-          </View>
+          <ObjectsScreen
+            onOpenRequests={() => {
+              setChatsStartAt('requests');
+              setActiveTab('Chats');
+            }}
+          />
         )}
 
         {/* Pestaña: PERFIL */}
@@ -284,6 +294,7 @@ export const MainNavigator = () => {
         {/* Espaciado al final para que el último elemento no quede detrás de la barra inferior */}
         <View className="h-10" />
       </ScrollView>
+      )}
 
       {/* Barra de navegación inferior */}
       <View className="flex-row bg-white border-t border-gray-200 pb-5 pt-3">
@@ -291,7 +302,12 @@ export const MainNavigator = () => {
           <TouchableOpacity
             key={tab}
             className="flex-1 items-center justify-center"
-            onPress={() => setActiveTab(tab)}
+            onPress={() => {
+              if (tab === 'Chats' && activeTab !== 'Chats') {
+                setChatsStartAt('home');
+              }
+              setActiveTab(tab);
+            }}
             accessibilityRole="button"
           >
             <View className={`w-6 h-6 mb-1 rounded-full ${activeTab === tab ? 'bg-blue-600' : 'bg-gray-300'}`} />

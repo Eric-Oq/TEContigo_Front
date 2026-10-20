@@ -8,14 +8,16 @@ import {
   type ObjectItemKind,
 } from '../../api/objects/objectsApi';
 import { ObjectItemFormModal } from './ObjectItemFormModal';
+import { ObjectItemDetailsScreen } from './ObjectItemDetailsScreen';
 import { FoundItemCard } from './foundItems/FoundItemCard';
 import { LostItemCard } from './lostItems/LostItemCard';
 
 interface ObjectItemsScreenProps {
   kind: ObjectItemKind;
+  onOpenRequests: () => void;
 }
 
-export const ObjectItemsScreen: React.FC<ObjectItemsScreenProps> = ({ kind }) => {
+export const ObjectItemsScreen: React.FC<ObjectItemsScreenProps> = ({ kind, onOpenRequests }) => {
   const { accessToken } = useAuth();
   const [items, setItems] = useState<ObjectItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -25,6 +27,7 @@ export const ObjectItemsScreen: React.FC<ObjectItemsScreenProps> = ({ kind }) =>
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isFormVisible, setIsFormVisible] = useState(false);
   const [itemBeingEdited, setItemBeingEdited] = useState<ObjectItem | null>(null);
+  const [itemBeingViewed, setItemBeingViewed] = useState<ObjectItem | null>(null);
 
   const isLost = kind === 'lost';
   const itemType = isLost ? 'perdido' : 'encontrado';
@@ -129,6 +132,17 @@ export const ObjectItemsScreen: React.FC<ObjectItemsScreenProps> = ({ kind }) =>
     setIsFormVisible(true);
   };
 
+  if (itemBeingViewed) {
+    return (
+      <ObjectItemDetailsScreen
+        item={itemBeingViewed}
+        kind={kind}
+        onBack={() => setItemBeingViewed(null)}
+        onOpenRequests={onOpenRequests}
+      />
+    );
+  }
+
   return (
     <View>
       <View className="mb-4 flex-row items-center justify-between">
@@ -176,6 +190,7 @@ export const ObjectItemsScreen: React.FC<ObjectItemsScreenProps> = ({ kind }) =>
                 item={item}
                 onEdit={openEditForm}
                 onDelete={handleDelete}
+                onSelect={setItemBeingViewed}
               />
             ) : (
               <FoundItemCard
@@ -183,6 +198,7 @@ export const ObjectItemsScreen: React.FC<ObjectItemsScreenProps> = ({ kind }) =>
                 item={item}
                 onEdit={openEditForm}
                 onDelete={handleDelete}
+                onSelect={setItemBeingViewed}
               />
             )
           )}
