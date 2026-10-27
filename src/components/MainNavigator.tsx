@@ -1,5 +1,13 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  RefreshControl,
+  ScrollView,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { reportsApi } from '../api/reports/reportsApi';
 import type { Report, ReportFields } from '../api/reports/reportsApi';
@@ -11,56 +19,83 @@ import { ObjectsScreen } from '../modules/objects/ObjectsScreen';
 import { ChatsScreen } from '../modules/chats/ChatsScreen';
 import type { PushNotificationTarget } from '../modules/chats/ChatsScreen';
 import { getPushTarget, registerPushDevice } from '../modules/chats/pushNotifications';
+import { PaginationControls } from './PaginationControls';
 
 export const MainNavigator = () => {
   const [activeTab, setActiveTab] = useState('Avisos');
   const { accessToken, currentUser, logout } = useAuth();
   const [reports, setReports] = useState<Report[]>([]);
   const [isLoadingReports, setIsLoadingReports] = useState(true);
-  const [isLoadingMoreReports, setIsLoadingMoreReports] = useState(false);
-  const [hasMoreReports, setHasMoreReports] = useState(false);
+  const [isRefreshingReports, setIsRefreshingReports] = useState(false);
   const [reportPageNumber, setReportPageNumber] = useState(1);
+  const [reportTotalPages, setReportTotalPages] = useState(1);
   const [reportsError, setReportsError] = useState<string | null>(null);
   const [isReportFormVisible, setIsReportFormVisible] = useState(false);
   const [reportBeingEdited, setReportBeingEdited] = useState<Report | null>(null);
   const [reportChangingStatus, setReportChangingStatus] = useState<Report | null>(null);
   const [pushTarget, setPushTarget] = useState<PushNotificationTarget | null>(null);
   const [chatsStartAt, setChatsStartAt] = useState<'home' | 'requests'>('home');
+  const objectsRefreshRef = useRef<(() => Promise<void>) | null>(null);
 
   const tabs = ['Avisos', 'Objetos', 'Chats', 'Perfil'];
 
-  const loadReports = useCallback(async (pageNumber = 1, append = false) => {
+  const loadReports = useCallback(async (
+    pageNumber = 1,
+    refresh = false
+  ): Promise<Report[] | null> => {
     if (!accessToken) {
       setReports([]);
       setIsLoadingReports(false);
-      setIsLoadingMoreReports(false);
-      setHasMoreReports(false);
-      return;
+      setIsRefreshingReports(false);
+      setReportPageNumber(1);
+      setReportTotalPages(1);
+      return null;
     }
 
-    if (append) {
-      setIsLoadingMoreReports(true);
+    if (refresh) {
+      setIsRefreshingReports(true);
     } else {
       setIsLoadingReports(true);
     }
     setReportsError(null);
     try {
       const page = await reportsApi.list(accessToken, pageNumber);
-      setReports((current) => (append ? [...current, ...page.items] : page.items));
+      setReports(page.items);
       setReportPageNumber(page.pageNumber);
-      setHasMoreReports(page.pageNumber < page.totalPages);
+      setReportTotalPages(page.totalPages);
+      return page.items;
     } catch (error) {
       setReportsError(
         error instanceof Error ? error.message : 'No se pudieron cargar los reportes.'
       );
+      return null;
     } finally {
-      if (append) {
-        setIsLoadingMoreReports(false);
+      if (refresh) {
+        setIsRefreshingReports(false);
       } else {
         setIsLoadingReports(false);
       }
     }
   }, [accessToken]);
+
+  const registerObjectsRefresh = useCallback((refresh: (() => Promise<void>) | null) => {
+    objectsRefreshRef.current = refresh;
+  }, []);
+
+  const refreshActiveTab = useCallback(async () => {
+    if (activeTab === 'Avisos') {
+      await loadReports(reportPageNumber, true);
+      return;
+    }
+    if (activeTab === 'Objetos') {
+      setIsRefreshingReports(true);
+      try {
+        await objectsRefreshRef.current?.();
+      } finally {
+        setIsRefreshingReports(false);
+      }
+    }
+  }, [activeTab, loadReports, reportPageNumber]);
 
   useEffect(() => {
     void loadReports();
@@ -106,12 +141,26 @@ export const MainNavigator = () => {
     try {
       if (reportBeingEdited) {
         await reportsApi.update(reportBeingEdited.id, fields, accessToken);
+        const updatedReports = await loadReports(reportPageNumber);
+        const updatedReport = updatedReports?.find(
+          (report) => String(report.id) === String(reportBeingEdited.id)
+        );
+        if (
+          !updatedReport ||
+          updatedReport.name !== fields.name ||
+          updatedReport.category !== fields.category ||
+          updatedReport.description !== fields.description
+        ) {
+          throw new Error(
+            'El servidor aceptó la edición, pero al volver a consultar el reporte siguen apareciendo los datos anteriores. No se confirmó que los cambios se guardaran.'
+          );
+        }
       } else {
         await reportsApi.create(fields, accessToken);
+        await loadReports(1);
       }
       setIsReportFormVisible(false);
       setReportBeingEdited(null);
-      await loadReports();
     } catch (error) {
       showRequestError(error);
     }
@@ -148,9 +197,29 @@ export const MainNavigator = () => {
       return;
     }
     try {
-      await reportsApi.update(reportChangingStatus.id, { status }, accessToken);
+      await reportsApi.update(
+        reportChangingStatus.id,
+        {
+          name: reportChangingStatus.name,
+          category: reportChangingStatus.category,
+          description: reportChangingStatus.description,
+          status,
+        },
+        accessToken
+      );
+      const updatedReports = await loadReports(reportPageNumber);
+      const updatedReport = updatedReports?.find(
+        (report) => String(report.id) === String(reportChangingStatus.id)
+      );
+      if (
+        !updatedReport ||
+        normalizeReportStatus(updatedReport.status) !== normalizeReportStatus(status)
+      ) {
+        throw new Error(
+          'El servidor aceptó el cambio de estado, pero al volver a consultar el reporte sigue teniendo el estado anterior. No se confirmó que el cambio se guardara.'
+        );
+      }
       setReportChangingStatus(null);
-      await loadReports();
     } catch (error) {
       showRequestError(error);
     }
@@ -185,6 +254,15 @@ export const MainNavigator = () => {
       ) : (
       <ScrollView
           className="flex-1"
+          alwaysBounceVertical
+          refreshControl={
+            activeTab === 'Avisos' || activeTab === 'Objetos' ? (
+              <RefreshControl
+                refreshing={isRefreshingReports}
+                onRefresh={() => void refreshActiveTab()}
+              />
+            ) : undefined
+          }
           contentContainerStyle={{ 
             paddingHorizontal: 16, 
             paddingTop: 60, // <--- Esta es la clave para esquivar la Dynamic Island/Notch
@@ -204,9 +282,9 @@ export const MainNavigator = () => {
               <Text className="font-bold text-white">Crear reporte</Text>
             </TouchableOpacity>
 
-            {isLoadingReports ? (
+            {isLoadingReports && reports.length === 0 ? (
               <ActivityIndicator className="my-8" size="large" color="#2563eb" />
-            ) : reportsError ? (
+            ) : reportsError && reports.length === 0 ? (
               <View className="rounded-xl border border-red-200 bg-red-50 p-4">
                 <Text className="mb-3 text-red-700">{reportsError}</Text>
                 <TouchableOpacity onPress={() => void loadReports()} accessibilityRole="button">
@@ -223,11 +301,13 @@ export const MainNavigator = () => {
                   <View className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4">
                     <Text className="mb-3 text-red-700">{reportsError}</Text>
                     <TouchableOpacity
-                      onPress={() => void loadReports(reportPageNumber + 1, true)}
-                      disabled={isLoadingMoreReports}
+                      onPress={() => void loadReports(reportPageNumber, true)}
+                      disabled={isRefreshingReports}
                       accessibilityRole="button"
                     >
-                      <Text className="font-bold text-blue-700">Reintentar</Text>
+                      <Text className="font-bold text-blue-700">
+                        {isRefreshingReports ? 'Actualizando...' : 'Reintentar'}
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 )}
@@ -240,18 +320,12 @@ export const MainNavigator = () => {
                     onChangeStatus={setReportChangingStatus}
                   />
                 ))}
-                {hasMoreReports && (
-                  <TouchableOpacity
-                    className="mb-4 items-center rounded-lg border border-blue-200 py-3"
-                    onPress={() => void loadReports(reportPageNumber + 1, true)}
-                    disabled={isLoadingMoreReports}
-                    accessibilityRole="button"
-                  >
-                    <Text className="font-semibold text-blue-700">
-                      {isLoadingMoreReports ? 'Cargando...' : 'Cargar más reportes'}
-                    </Text>
-                  </TouchableOpacity>
-                )}
+                <PaginationControls
+                  pageNumber={reportPageNumber}
+                  totalPages={reportTotalPages}
+                  onPageChange={(page) => void loadReports(page)}
+                  disabled={isLoadingReports || isRefreshingReports}
+                />
               </>
             )}
           </View>
@@ -264,6 +338,7 @@ export const MainNavigator = () => {
               setChatsStartAt('requests');
               setActiveTab('Chats');
             }}
+            onRefreshReady={registerObjectsRefresh}
           />
         )}
 
@@ -306,6 +381,9 @@ export const MainNavigator = () => {
               if (tab === 'Chats' && activeTab !== 'Chats') {
                 setChatsStartAt('home');
               }
+              if (tab === 'Avisos' && activeTab !== 'Avisos') {
+                void loadReports(reportPageNumber, true);
+              }
               setActiveTab(tab);
             }}
             accessibilityRole="button"
@@ -336,3 +414,12 @@ export const MainNavigator = () => {
     </View>
   );
 };
+
+function normalizeReportStatus(status: string): string {
+  return status
+    .trim()
+    .toLocaleUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[\s-]/g, '_');
+}

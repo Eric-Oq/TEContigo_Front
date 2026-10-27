@@ -1,16 +1,26 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Image, ScrollView, Text, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { useAuth } from '../../AuthContext';
+import { ApiError } from '../../api/auth/client';
 import { contactRequestsApi } from '../../api/contactRequests/contactRequestsApi';
 import { matchesApi } from '../../api/matches/matchesApi';
 import type { ContactRequest, Match } from '../../api/types';
 import type { ObjectItem, ObjectItemKind } from '../../api/objects/objectsApi';
+import { PaginationControls } from '../../components/PaginationControls';
 
 interface ObjectItemDetailsScreenProps {
   item: ObjectItem;
   kind: ObjectItemKind;
   onBack: () => void;
   onOpenRequests: () => void;
+  onRefreshReady: (refresh: (() => Promise<void>) | null) => void;
 }
 
 export const ObjectItemDetailsScreen: React.FC<ObjectItemDetailsScreenProps> = ({
@@ -18,54 +28,84 @@ export const ObjectItemDetailsScreen: React.FC<ObjectItemDetailsScreenProps> = (
   kind,
   onBack,
   onOpenRequests,
+  onRefreshReady,
 }) => {
   const { accessToken, currentUser } = useAuth();
   const [matches, setMatches] = useState<Match[]>([]);
+  const [matchPageNumber, setMatchPageNumber] = useState(1);
   const [requests, setRequests] = useState<ContactRequest[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadingMatches, setLoadingMatches] = useState(true);
+  const [loadingRequests, setLoadingRequests] = useState(false);
+  const [requestsLoaded, setRequestsLoaded] = useState(false);
   const [acting, setActing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [matchesError, setMatchesError] = useState<string | null>(null);
+  const [requestsError, setRequestsError] = useState<string | null>(null);
   const userId = toNumber(currentUser?.id);
   const itemId = toNumber(item.id);
   const owner = userId !== null && userId === toNumber(item.userId);
   const found = kind === 'found';
   const pendingRequest = requests.find((request) =>
     request.requesterId === userId &&
-    request.foundItem.id === itemId &&
+    request.foundItem?.id === itemId &&
     request.status === 'Pendiente'
   );
   const receivedRequests = requests.filter((request) =>
-    request.foundItem.id === itemId &&
+    request.foundItem?.id === itemId &&
     request.foundItem.userId === userId &&
     request.status === 'Pendiente'
   );
   const active = normalizeStatus(item.status) === 'ACTIVO';
   const canRequestContact =
-    found && !owner && active && !pendingRequest && currentUser?.role === 'USER';
+    found && requestsLoaded && !owner && active && !pendingRequest && currentUser?.role === 'USER';
 
-  const load = useCallback(async () => {
+  const loadMatches = useCallback(async () => {
     if (!accessToken) return;
-    setLoading(true);
-    setError(null);
+    setLoadingMatches(true);
+    setMatchesError(null);
     try {
-      const [allMatches, requestList] = await Promise.all([
-        loadAllMatches(accessToken),
-        found ? contactRequestsApi.getAll(accessToken) : Promise.resolve([]),
-      ]);
-      setMatches(allMatches.filter((match) =>
-        (kind === 'lost' ? match.lostItem.id : match.foundItem.id) === itemId
-      ));
-      setRequests(requestList);
+      const allMatches = await loadAllMatches(accessToken);
+      const relatedMatches = allMatches.filter((match) => {
+        if (!match?.lostItem || !match.foundItem) return false;
+        return (kind === 'lost' ? match.lostItem.id : match.foundItem.id) === itemId;
+      });
+      setMatches(relatedMatches);
+      setMatchPageNumber((current) =>
+        Math.min(current, Math.max(1, Math.ceil(relatedMatches.length / 20)))
+      );
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'No se pudieron cargar los detalles.');
+      setMatchesError(formatMatchesError(reason));
     } finally {
-      setLoading(false);
+      setLoadingMatches(false);
     }
-  }, [accessToken, found, itemId, kind]);
+  }, [accessToken, itemId, kind]);
+
+  const loadRequests = useCallback(async () => {
+    if (!accessToken || !found) return;
+    setLoadingRequests(true);
+    setRequestsError(null);
+    try {
+      setRequests(await contactRequestsApi.getAll(accessToken));
+      setRequestsLoaded(true);
+    } catch (reason) {
+      setRequestsError(reason instanceof Error ? reason.message : 'No se pudieron cargar las solicitudes.');
+    } finally {
+      setLoadingRequests(false);
+    }
+  }, [accessToken, found]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    void loadMatches();
+    if (found) void loadRequests();
+  }, [found, loadMatches, loadRequests]);
+
+  const refreshDetails = useCallback(async () => {
+    await Promise.all([loadMatches(), loadRequests()]);
+  }, [loadMatches, loadRequests]);
+
+  useEffect(() => {
+    onRefreshReady(refreshDetails);
+    return () => onRefreshReady(null);
+  }, [onRefreshReady, refreshDetails]);
 
   const createRequest = () => {
     if (!accessToken || itemId === null || acting || !canRequestContact) return;
@@ -81,7 +121,7 @@ export const ObjectItemDetailsScreen: React.FC<ObjectItemDetailsScreenProps> = (
               setActing(true);
               try {
                 await contactRequestsApi.create({ foundItemId: itemId }, accessToken);
-                await load();
+                await loadRequests();
               } catch (reason) {
                 Alert.alert(
                   'No se pudo enviar la solicitud',
@@ -102,7 +142,7 @@ export const ObjectItemDetailsScreen: React.FC<ObjectItemDetailsScreenProps> = (
     setActing(true);
     try {
       await contactRequestsApi.cancel(pendingRequest.id, accessToken);
-      await load();
+      await loadRequests();
     } catch (reason) {
       Alert.alert(
         'No se pudo cancelar la solicitud',
@@ -123,17 +163,10 @@ export const ObjectItemDetailsScreen: React.FC<ObjectItemDetailsScreenProps> = (
           {found ? 'Objeto encontrado' : 'Objeto perdido'}
         </Text>
       </View>
-      {loading ? (
-        <ActivityIndicator className="my-8" size="large" color="#2563eb" />
-      ) : error ? (
-        <View className="m-4 rounded-xl border border-red-200 bg-red-50 p-4">
-          <Text className="mb-3 text-red-700">{error}</Text>
-          <TouchableOpacity onPress={() => void load()} accessibilityRole="button">
-            <Text className="font-bold text-blue-700">Reintentar</Text>
-          </TouchableOpacity>
-        </View>
+      {!accessToken ? (
+        <Text className="m-4 text-center text-gray-500">Inicia sesión para consultar los detalles.</Text>
       ) : (
-        <ScrollView className="flex-1" contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
+        <View className="px-4 pb-8 pt-4">
           <View className="overflow-hidden rounded-xl border border-gray-200 bg-white">
             {item.photoUrl && (
               <Image source={{ uri: item.photoUrl }} className="h-56 w-full bg-gray-100" resizeMode="cover" />
@@ -152,12 +185,26 @@ export const ObjectItemDetailsScreen: React.FC<ObjectItemDetailsScreenProps> = (
             <TouchableOpacity
               className="mt-4 items-center rounded-lg bg-blue-600 px-4 py-3"
               onPress={onOpenRequests}
+              disabled={loadingRequests}
               accessibilityRole="button"
             >
               <Text className="font-bold text-white">
-                Ver solicitudes recibidas{receivedRequests.length ? ` (${receivedRequests.length})` : ''}
+                {loadingRequests
+                  ? 'Cargando solicitudes…'
+                  : `Ver solicitudes recibidas${receivedRequests.length ? ` (${receivedRequests.length})` : ''}`}
               </Text>
             </TouchableOpacity>
+          )}
+
+          {found && requestsError && (
+            <View className="mt-3 rounded-lg border border-red-200 bg-red-50 p-3">
+              <Text className="mb-2 text-sm text-red-700">
+                No se pudieron cargar las solicitudes: {requestsError}
+              </Text>
+              <TouchableOpacity onPress={() => void loadRequests()} accessibilityRole="button">
+                <Text className="font-bold text-blue-700">Reintentar</Text>
+              </TouchableOpacity>
+            </View>
           )}
 
           {canRequestContact && (
@@ -201,19 +248,41 @@ export const ObjectItemDetailsScreen: React.FC<ObjectItemDetailsScreenProps> = (
           )}
 
           <Text className="mb-3 mt-6 text-lg font-bold text-blue-900">Posibles coincidencias</Text>
-          {matches.length === 0 ? (
-            <Text className="text-center text-gray-500">No hay matches asociados a este objeto.</Text>
-          ) : matches.map((match) => (
-            <View key={match.id} className="mb-3 rounded-xl border border-gray-200 bg-white p-4">
-              <Text className="font-semibold text-gray-900">
-                {kind === 'lost' ? match.foundItem.article : match.lostItem.article}
+          {loadingMatches ? (
+            <ActivityIndicator className="my-4" color="#2563eb" />
+          ) : matchesError ? (
+            <View className="rounded-lg border border-red-200 bg-red-50 p-3">
+              <Text className="mb-2 text-sm text-red-700">
+                No se pudieron cargar los matches: {matchesError}
               </Text>
-              <Text className="mt-1 text-sm text-gray-500">
-                Posible coincidencia del {Math.round(match.matchPercentage)}% · {match.status}
-              </Text>
+              <TouchableOpacity onPress={() => void loadMatches()} accessibilityRole="button">
+                <Text className="font-bold text-blue-700">Reintentar</Text>
+              </TouchableOpacity>
             </View>
-          ))}
-        </ScrollView>
+          ) : matches.length === 0 ? (
+            <Text className="text-center text-gray-500">No hay matches asociados a este objeto.</Text>
+          ) : (
+            <>
+              {matches
+                .slice((matchPageNumber - 1) * 20, matchPageNumber * 20)
+                .map((match) => (
+                  <View key={match.id} className="mb-3 rounded-xl border border-gray-200 bg-white p-4">
+                    <Text className="font-semibold text-gray-900">
+                      {kind === 'lost' ? match.foundItem.article : match.lostItem.article}
+                    </Text>
+                    <Text className="mt-1 text-sm text-gray-500">
+                      Posible coincidencia del {Math.round(match.matchPercentage)}% · {match.status}
+                    </Text>
+                  </View>
+                ))}
+              <PaginationControls
+                pageNumber={matchPageNumber}
+                totalPages={Math.max(1, Math.ceil(matches.length / 20))}
+                onPageChange={setMatchPageNumber}
+              />
+            </>
+          )}
+        </View>
       )}
     </View>
   );
@@ -230,7 +299,7 @@ function normalizeStatus(value: string): string {
 }
 
 async function loadAllMatches(token: string): Promise<Match[]> {
-  const firstPage = await matchesApi.getAll(token, 1, 50);
+  const firstPage = await matchesApi.getAll(token, 1);
   const matches = [...firstPage.items];
 
   for (let pageNumber = firstPage.pageNumber + 1; pageNumber <= firstPage.totalPages; pageNumber += 1) {
@@ -239,4 +308,11 @@ async function loadAllMatches(token: string): Promise<Match[]> {
   }
 
   return matches;
+}
+
+function formatMatchesError(error: unknown): string {
+  if (error instanceof ApiError) {
+    return `El servidor respondió HTTP ${error.status}: ${error.message}`;
+  }
+  return error instanceof Error ? error.message : 'No se pudieron cargar los matches.';
 }

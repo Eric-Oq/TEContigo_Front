@@ -19,6 +19,8 @@ import { conversationsApi } from '../../api/chats/conversationsApi';
 import { messagesApi } from '../../api/chats/messagesApi';
 import { matchesApi } from '../../api/matches/matchesApi';
 import { notificationsApi } from '../../api/notifications/notificationsApi';
+import { PaginationControls } from '../../components/PaginationControls';
+import { MatchesListScreen, MatchDetailsScreen } from '../matches/MatchesScreens';
 import type {
   AppNotification,
   ChatMessage,
@@ -27,11 +29,18 @@ import type {
   Match,
 } from '../../api/types';
 
+const PAGE_SIZE = 20;
+
 type Page =
   | { name: 'home' }
   | { name: 'chat'; conversation: Conversation }
   | { name: 'matches' }
-  | { name: 'match'; matchId: number }
+  | {
+      name: 'match';
+      matchId: number;
+      returnTo: 'home' | 'matches' | 'chat';
+      conversation?: Conversation;
+    }
   | { name: 'requests' }
   | { name: 'notifications' };
 
@@ -60,7 +69,7 @@ export const ChatsScreen: React.FC<{
     if (!pushTarget || !accessToken || handledPushKey.current === pushTarget.key) return;
     handledPushKey.current = pushTarget.key;
     if (pushTarget.referenceType === 'Match') {
-      setPage({ name: 'match', matchId: pushTarget.referenceId });
+      setPage({ name: 'match', matchId: pushTarget.referenceId, returnTo: 'home' });
     } else if (pushTarget.referenceType === 'ContactRequest') {
       setPage({ name: 'requests' });
     } else {
@@ -71,16 +80,11 @@ export const ChatsScreen: React.FC<{
   }, [accessToken, goToConversation, pushTarget]);
 
   const goBack = () => setPage({ name: 'home' });
-  const openConversationByRelation = useCallback(async (
-    kind: 'match' | 'request',
-    id: number
-  ) => {
+  const openConversationByRequest = useCallback(async (id: number) => {
     if (!accessToken) return;
     try {
       const conversations = await conversationsApi.getAll(accessToken);
-      const conversation = conversations.find((item) =>
-        kind === 'match' ? item.matchId === id : item.contactRequestId === id
-      );
+      const conversation = conversations.find((item) => item.contactRequestId === id);
       if (!conversation) {
         Alert.alert('Chat no disponible', 'Todavía no se creó una conversación para esta solicitud.');
         return;
@@ -91,12 +95,40 @@ export const ChatsScreen: React.FC<{
     }
   }, [accessToken, goToConversation]);
 
+  async function openConversationByMatch(matchId: number): Promise<void> {
+    if (!accessToken) return;
+    try {
+      const conversation = await resolveConversationByMatchId(matchId, accessToken);
+      if (!conversation) {
+        Alert.alert(
+          'Chat no disponible',
+          'Todavía no se encontró la conversación para este match.',
+          [
+            { text: 'Cancelar', style: 'cancel' },
+            { text: 'Reintentar', onPress: () => void openConversationByMatch(matchId) },
+          ]
+        );
+        return;
+      }
+      goToConversation(conversation);
+    } catch (error) {
+      Alert.alert(
+        'No se pudo abrir el chat',
+        messageFor(error),
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          { text: 'Reintentar', onPress: () => void openConversationByMatch(matchId) },
+        ]
+      );
+    }
+  }
+
   const openNotification = useCallback(async (notification: AppNotification) => {
     if (!accessToken) return;
     try {
       await notificationsApi.markAsRead(notification.id, accessToken);
       if (notification.referenceType === 'Match') {
-        setPage({ name: 'match', matchId: notification.referenceId });
+        setPage({ name: 'match', matchId: notification.referenceId, returnTo: 'home' });
       } else if (notification.referenceType === 'Conversation') {
         const conversation = await conversationsApi.getById(
           notification.referenceId,
@@ -129,25 +161,44 @@ export const ChatsScreen: React.FC<{
         <ConversationThread
           conversation={page.conversation}
           onBack={goBack}
+          onOpenMatch={(matchId) => setPage({
+            name: 'match',
+            matchId,
+            returnTo: 'chat',
+            conversation: page.conversation,
+          })}
         />
       )}
       {page.name === 'matches' && (
-        <MatchesList
+        <MatchesListScreen
           onBack={goBack}
-          onOpen={(match) => setPage({ name: 'match', matchId: match.id })}
+          onOpenMatch={(matchId) => setPage({
+            name: 'match',
+            matchId,
+            returnTo: 'matches',
+          })}
+          onOpenConversation={(matchId) => void openConversationByMatch(matchId)}
         />
       )}
       {page.name === 'match' && (
-        <MatchDetails
+        <MatchDetailsScreen
           matchId={page.matchId}
-          onBack={goBack}
-          onOpenConversation={(id) => void openConversationByRelation('match', id)}
+          onBack={() => {
+            if (page.returnTo === 'chat' && page.conversation) {
+              setPage({ name: 'chat', conversation: page.conversation });
+            } else if (page.returnTo === 'matches') {
+              setPage({ name: 'matches' });
+            } else {
+              setPage({ name: 'home' });
+            }
+          }}
+          onOpenConversation={(id) => void openConversationByMatch(id)}
         />
       )}
       {page.name === 'requests' && (
         <ContactRequestsList
           onBack={goBack}
-          onOpenConversation={(id) => void openConversationByRelation('request', id)}
+          onOpenConversation={(id) => void openConversationByRequest(id)}
         />
       )}
       {page.name === 'notifications' && (
@@ -179,14 +230,38 @@ const ConversationList: React.FC<ConversationListProps> = ({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [newMatchesCount, setNewMatchesCount] = useState(0);
+  const [matchesCountError, setMatchesCountError] = useState<string | null>(null);
+  const [pageNumber, setPageNumber] = useState(1);
+
+  const loadMatchesCount = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      const result = await matchesApi.getAll(accessToken, 1);
+      const userId = numericUserId(currentUser?.id);
+      setNewMatchesCount(result.items.filter((match) => {
+        if (match.status !== 'Pendiente' || userId === null) return false;
+        if (match.lostItem.userId === userId) return !match.lostUserChatRequest;
+        if (match.foundItem.userId === userId) return !match.foundUserChatRequest;
+        return false;
+      }).length);
+      setMatchesCountError(null);
+    } catch (reason) {
+      setMatchesCountError(messageFor(reason));
+    }
+  }, [accessToken, currentUser?.id]);
 
   const load = useCallback(async (refresh = false) => {
     if (!accessToken) return;
+    void loadMatchesCount();
     refresh ? setRefreshing(true) : setLoading(true);
     setError(null);
     try {
       const result = await conversationsApi.getAll(accessToken);
       setConversations(result);
+      setPageNumber((current) =>
+        Math.min(current, Math.max(1, Math.ceil(result.length / PAGE_SIZE)))
+      );
       const notifications = await notificationsApi.getAll(accessToken);
       setUnreadCount(notifications.items.filter((item) => !item.isRead).length);
     } catch (reason) {
@@ -195,34 +270,65 @@ const ConversationList: React.FC<ConversationListProps> = ({
       setLoading(false);
       setRefreshing(false);
     }
-  }, [accessToken]);
+  }, [accessToken, loadMatchesCount]);
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  useEffect(() => {
+    const appStateSubscription = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void load();
+    });
+    return () => appStateSubscription.remove();
   }, [load]);
 
   const userId = numericUserId(currentUser?.id);
 
   return (
     <View className="flex-1 px-4 pt-4">
-      <Text className="mb-4 text-3xl font-bold text-blue-900">Chats</Text>
+      <Text className="mb-4 mt-8 text-3xl font-bold text-blue-900">Chats</Text>
       <View className="mb-4 flex-row flex-wrap gap-2">
-        <ActionChip label="Matches" onPress={onMatches} />
+        <ActionChip
+          label={`Matches${newMatchesCount > 0 ? ` (${newMatchesCount})` : ''}`}
+          onPress={onMatches}
+        />
         <ActionChip label="Solicitudes" onPress={onRequests} />
         <ActionChip label={`Notificaciones${unreadCount ? ` (${unreadCount})` : ''}`} onPress={onNotifications} />
       </View>
+      {matchesCountError && (
+        <View className="mb-3 flex-row items-center justify-between rounded-lg bg-amber-50 px-3 py-2">
+          <Text className="mr-2 flex-1 text-xs text-amber-800">
+            No se pudo actualizar el indicador de matches. {matchesCountError}
+          </Text>
+          <TouchableOpacity onPress={() => void loadMatchesCount()} accessibilityRole="button">
+            <Text className="text-xs font-bold text-blue-700">Reintentar</Text>
+          </TouchableOpacity>
+        </View>
+      )}
       {loading ? (
         <ActivityIndicator className="my-8" size="large" color="#2563eb" />
-      ) : error ? (
-        <RetryMessage message={error} onRetry={() => void load()} />
-      ) : conversations.length === 0 ? (
-        <StateMessage message="Aún no tienes conversaciones. Puedes iniciar una desde un match o al solicitar contacto por un objeto encontrado." />
       ) : (
         <FlatList
-          data={conversations}
+          data={error ? [] : conversations.slice((pageNumber - 1) * PAGE_SIZE, pageNumber * PAGE_SIZE)}
           keyExtractor={(item) => String(item.id)}
+          alwaysBounceVertical
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} />
+          }
+          ListHeaderComponent={error ? <RetryMessage message={error} onRetry={() => void load()} /> : null}
+          ListEmptyComponent={
+            error ? null : (
+              <StateMessage message="Aún no tienes conversaciones. Puedes iniciar una desde un match o al solicitar contacto por un objeto encontrado." />
+            )
+          }
+          ListFooterComponent={
+            <PaginationControls
+              pageNumber={pageNumber}
+              totalPages={Math.max(1, Math.ceil(conversations.length / PAGE_SIZE))}
+              onPageChange={setPageNumber}
+              disabled={refreshing}
+            />
           }
           renderItem={({ item }) => {
             const isRequester = userId !== null && item.requesterId === userId;
@@ -251,6 +357,9 @@ const ConversationList: React.FC<ConversationListProps> = ({
                   <Text className="mt-1 text-sm text-gray-500">
                     {roleLabel} · {formatDate(item.createdAt)}
                   </Text>
+                  <Text className="mt-1 text-xs font-semibold text-blue-700">
+                    {item.matchId !== null ? 'Por coincidencia' : 'Por solicitud'}
+                  </Text>
                 </View>
                 {item.closedAt && (
                   <Text className="ml-2 rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-600">
@@ -269,6 +378,7 @@ const ConversationList: React.FC<ConversationListProps> = ({
 interface ConversationThreadProps {
   conversation: Conversation;
   onBack: () => void;
+  onOpenMatch: (matchId: number) => void;
 }
 
 interface VisibleMessage extends ChatMessage {
@@ -279,6 +389,7 @@ interface VisibleMessage extends ChatMessage {
 const ConversationThread: React.FC<ConversationThreadProps> = ({
   conversation: initialConversation,
   onBack,
+  onOpenMatch,
 }) => {
   const { accessToken, currentUser } = useAuth();
   const [conversation, setConversation] = useState(initialConversation);
@@ -292,6 +403,7 @@ const ConversationThread: React.FC<ConversationThreadProps> = ({
   const [totalPages, setTotalPages] = useState(1);
   const [sending, setSending] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [relatedMatch, setRelatedMatch] = useState<Match | null>(null);
   const userId = numericUserId(currentUser?.id);
   const isParticipant = userId !== null &&
     (userId === conversation.requesterId || userId === conversation.finderId);
@@ -340,19 +452,48 @@ const ConversationThread: React.FC<ConversationThreadProps> = ({
     }
   }, [accessToken, conversation.id, mergeMessages]);
 
+  const loadRelatedMatch = useCallback(async () => {
+    if (!accessToken || conversation.matchId === null) {
+      setRelatedMatch(null);
+      return;
+    }
+    try {
+      setRelatedMatch(await matchesApi.getById(conversation.matchId, accessToken));
+    } catch {
+      setRelatedMatch(null);
+    }
+  }, [accessToken, conversation.matchId]);
+
   useEffect(() => {
     void loadLatest(true);
   }, [loadLatest]);
 
   useEffect(() => {
+    void loadRelatedMatch();
+  }, [loadRelatedMatch]);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const stopPolling = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    const startPolling = () => {
+      if (timer === null) timer = setInterval(() => void loadLatest(), 4000);
+    };
+    if (AppState.currentState === 'active') startPolling();
     const appStateSubscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void loadLatest();
+      if (state === 'active') {
+        void loadLatest();
+        startPolling();
+      } else {
+        stopPolling();
+      }
     });
-    const timer = setInterval(() => {
-      if (AppState.currentState === 'active') void loadLatest();
-    }, 4000);
     return () => {
-      clearInterval(timer);
+      stopPolling();
       appStateSubscription.remove();
     };
   }, [loadLatest]);
@@ -440,6 +581,7 @@ const ConversationThread: React.FC<ConversationThreadProps> = ({
               try {
                 await conversationsApi.confirmReturn(conversation.id, accessToken);
                 await loadLatest();
+                if (conversation.matchId !== null) await loadRelatedMatch();
               } catch (reason) {
                 Alert.alert('No se pudo confirmar', messageFor(reason));
               } finally {
@@ -458,7 +600,7 @@ const ConversationThread: React.FC<ConversationThreadProps> = ({
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 24 : 0}
     >
-      <View className="flex-1 px-4 pt-3">
+      <View className="flex-1 px-4 pt-16">
         <View className="mb-3 flex-row items-center">
           <TouchableOpacity onPress={onBack} className="mr-3 py-2" accessibilityRole="button">
             <Text className="font-semibold text-blue-600">‹ Chats</Text>
@@ -470,11 +612,28 @@ const ConversationThread: React.FC<ConversationThreadProps> = ({
             <Text className="text-lg font-bold text-blue-900" numberOfLines={1}>
               {conversation.foundItem.article}
             </Text>
-            <Text className="text-xs text-gray-500">
-              {readOnly
-                ? `${conversation.requesterConfirmedReturn ? 'Quien lo busca ya confirmó' : 'Quien lo busca aún no confirma'} · ${conversation.finderConfirmedReturn ? 'Quien lo encontró ya confirmó' : 'Quien lo encontró aún no confirma'}`
-                : `${myConfirmed ? 'Tú ya confirmaste' : 'Tú aún no confirmas'} · ${otherConfirmed ? 'La otra persona ya confirmó' : 'La otra persona aún no confirma'}`}
-            </Text>
+            <View>
+              <Text className="text-xs text-gray-500">
+                {readOnly
+                  ? `${conversation.requesterConfirmedReturn ? 'Quien lo busca ya confirmó' : 'Quien lo busca aún no confirma'} · ${conversation.finderConfirmedReturn ? 'Quien lo encontró ya confirmó' : 'Quien lo encontró aún no confirma'}`
+                  : `${myConfirmed ? 'Tú ya confirmaste' : 'Tú aún no confirmas'} · ${otherConfirmed ? 'La otra persona ya confirmó' : 'La otra persona aún no confirma'}`}
+              </Text>
+              <Text className="text-xs text-gray-500">
+                Origen: {conversation.matchId !== null ? 'Por coincidencia' : 'Por solicitud'}
+              </Text>
+              {conversation.matchId !== null && relatedMatch && (
+                <TouchableOpacity
+                  onPress={() => {
+                    if (conversation.matchId !== null) onOpenMatch(conversation.matchId);
+                  }}
+                  accessibilityRole="button"
+                >
+                  <Text className="text-xs font-semibold text-blue-700">
+                    Coincidencia {Math.round(relatedMatch.matchPercentage)}% · Ver match
+                  </Text>
+                </TouchableOpacity>
+              )}
+            </View>
           </View>
           {!readOnly && !closed && (
             <TouchableOpacity
@@ -513,6 +672,7 @@ const ConversationThread: React.FC<ConversationThreadProps> = ({
               inverted
               data={messages}
               keyExtractor={(item) => item.localId}
+              alwaysBounceVertical
               onEndReached={() => void loadOlder()}
               onEndReachedThreshold={0.3}
               refreshControl={
@@ -583,208 +743,6 @@ const ConversationThread: React.FC<ConversationThreadProps> = ({
   );
 };
 
-interface MatchesListProps {
-  onBack: () => void;
-  onOpen: (match: Match) => void;
-}
-
-const MatchesList: React.FC<MatchesListProps> = ({ onBack, onOpen }) => {
-  const { accessToken } = useAuth();
-  const [items, setItems] = useState<Match[]>([]);
-  const [pageNumber, setPageNumber] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async (page = 1) => {
-    if (!accessToken) return;
-    setError(null);
-    page === 1 ? setLoading(true) : setLoadingMore(true);
-    try {
-      const result = await matchesApi.getAll(accessToken, page);
-      setItems((current) => page === 1
-        ? result.items
-        : [...current, ...result.items.filter((item) =>
-            !current.some((existing) => existing.id === item.id)
-          )]
-      );
-      setPageNumber(result.pageNumber);
-      setTotalPages(result.totalPages);
-    } catch (reason) {
-      setError(messageFor(reason));
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, [accessToken]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  return (
-    <View className="flex-1 px-4 pt-4">
-      <PageHeader title="Matches" onBack={onBack} />
-      {loading ? (
-        <ActivityIndicator className="my-8" size="large" color="#2563eb" />
-      ) : error && items.length === 0 ? (
-        <RetryMessage message={error} onRetry={() => void load()} />
-      ) : items.length === 0 ? (
-        <StateMessage message="Todavía no hay posibles coincidencias para tus objetos." />
-      ) : (
-        <FlatList
-          data={items}
-          keyExtractor={(item) => String(item.id)}
-          onEndReached={() => {
-            if (pageNumber < totalPages && !loadingMore) void load(pageNumber + 1);
-          }}
-          onEndReachedThreshold={0.5}
-          ListHeaderComponent={error ? (
-            <RetryMessage message={error} onRetry={() => void load(pageNumber + 1)} />
-          ) : null}
-          ListFooterComponent={loadingMore ? <ActivityIndicator className="py-4" /> : null}
-          renderItem={({ item }) => (
-            <TouchableOpacity
-              className="mb-3 rounded-xl border border-gray-200 bg-white p-4"
-              onPress={() => onOpen(item)}
-              accessibilityRole="button"
-            >
-              <MatchObjectRow label="Perdiste" item={item.lostItem} />
-              <MatchObjectRow label="Encontraste" item={item.foundItem} />
-              <View className="mt-3 flex-row items-center justify-between">
-                <Text className="font-bold text-blue-700">
-                  Coincidencia: {Math.round(item.matchPercentage)}%
-                </Text>
-                <Text className="text-sm text-gray-500">{item.status}</Text>
-              </View>
-              <View className="mt-2 h-2 overflow-hidden rounded-full bg-gray-100">
-                <View
-                  className="h-full rounded-full bg-blue-600"
-                  style={{ width: `${Math.max(0, Math.min(100, item.matchPercentage))}%` }}
-                />
-              </View>
-            </TouchableOpacity>
-          )}
-        />
-      )}
-    </View>
-  );
-};
-
-interface MatchDetailsProps {
-  matchId: number;
-  onBack: () => void;
-  onOpenConversation: (matchId: number) => void;
-}
-
-const MatchDetails: React.FC<MatchDetailsProps> = ({
-  matchId,
-  onBack,
-  onOpenConversation,
-}) => {
-  const { accessToken, currentUser } = useAuth();
-  const [match, setMatch] = useState<Match | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [acting, setActing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const userId = numericUserId(currentUser?.id);
-  const isLostUser = match !== null && userId === match.lostItem.userId;
-  const ownFlag = match ? (isLostUser
-    ? match.lostUserChatRequest
-    : match.foundUserChatRequest) : false;
-  const otherFlag = match ? (isLostUser
-    ? match.foundUserChatRequest
-    : match.lostUserChatRequest) : false;
-  const isParticipant = match !== null &&
-    userId !== null &&
-    (userId === match.lostItem.userId || userId === match.foundItem.userId);
-  const canRequestChat =
-    currentUser?.role === 'USER' && isParticipant && match?.status === 'Pendiente';
-
-  const load = useCallback(async () => {
-    if (!accessToken) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setMatch(await matchesApi.getById(matchId, accessToken));
-    } catch (reason) {
-      setError(messageFor(reason));
-    } finally {
-      setLoading(false);
-    }
-  }, [accessToken, matchId]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  const toggleChat = async () => {
-    if (!accessToken || !match || acting || !canRequestChat) return;
-    setActing(true);
-    try {
-      const response = await matchesApi.requestChat(match.id, accessToken);
-      const updated = await matchesApi.getById(match.id, accessToken);
-      setMatch(updated);
-      if (response.bothUsersAccepted || updated.status === 'ChatActivo') {
-        onOpenConversation(match.id);
-      }
-    } catch (reason) {
-      Alert.alert('No se pudo cambiar la solicitud', messageFor(reason));
-      await load();
-    } finally {
-      setActing(false);
-    }
-  };
-
-  return (
-    <View className="flex-1 px-4 pt-4">
-      <PageHeader title="Detalle del match" onBack={onBack} />
-      {loading ? <ActivityIndicator className="my-8" size="large" color="#2563eb" /> :
-        error || !match ? (
-          <RetryMessage message={error ?? 'No se encontró el match.'} onRetry={() => void load()} />
-        ) : (
-          <FlatList
-            data={[match]}
-            keyExtractor={(item) => String(item.id)}
-            renderItem={({ item }) => (
-              <View className="rounded-xl border border-gray-200 bg-white p-4">
-                <View className="flex-row gap-2">
-                  <MatchObjectCard label="Perdido" item={item.lostItem} />
-                  <MatchObjectCard label="Encontrado" item={item.foundItem} />
-                </View>
-                <Text className="my-3 font-bold text-blue-700">
-                  Posible coincidencia del {Math.round(item.matchPercentage)}%
-                </Text>
-                <Text className="mb-4 text-gray-600">Estado: {item.status}</Text>
-                {item.status === 'ChatActivo' ? (
-                  <PrimaryAction label="Ir al chat" onPress={() => onOpenConversation(item.id)} />
-                ) : item.status === 'Pendiente' && canRequestChat ? (
-                  <>
-                    {ownFlag && !otherFlag && (
-                      <Text className="mb-3 text-gray-500">Esperando a que la otra persona acepte.</Text>
-                    )}
-                    {!ownFlag && otherFlag && (
-                      <Text className="mb-3 text-gray-500">La otra persona quiere chatear.</Text>
-                    )}
-                    <PrimaryAction
-                      label={acting ? 'Actualizando…' : ownFlag ? 'Dejar de querer chatear' : 'Quiero chatear'}
-                      onPress={() => void toggleChat()}
-                      disabled={acting}
-                    />
-                  </>
-                ) : null}
-                {item.status === 'Cerrado' && (
-                  <Text className="text-gray-500">Este match está cerrado y solo puede consultarse.</Text>
-                )}
-              </View>
-            )}
-          />
-        )}
-    </View>
-  );
-};
-
 interface ContactRequestsListProps {
   onBack: () => void;
   onOpenConversation: (requestId: number) => void;
@@ -798,22 +756,27 @@ const ContactRequestsList: React.FC<ContactRequestsListProps> = ({
   const [requests, setRequests] = useState<ContactRequest[]>([]);
   const [activeTab, setActiveTab] = useState<'received' | 'sent'>('received');
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [workingId, setWorkingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [pageNumber, setPageNumber] = useState(1);
   const userId = numericUserId(currentUser?.id);
   const readOnly = currentUser?.role !== 'USER';
   const privileged = currentUser?.role === 'ADMIN' || currentUser?.role === 'MODERATOR';
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refresh = false) => {
     if (!accessToken) return;
-    setLoading(true);
+    if (refresh) setRefreshing(true);
+    else setLoading(true);
     setError(null);
     try {
       setRequests(await contactRequestsApi.getAll(accessToken));
+      setPageNumber(1);
     } catch (reason) {
       setError(messageFor(reason));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [accessToken]);
 
@@ -828,6 +791,8 @@ const ContactRequestsList: React.FC<ContactRequestsListProps> = ({
     ? []
     : requests.filter((item) => userId !== null && item.requesterId === userId);
   const visible = activeTab === 'received' ? received : sent;
+  const visiblePageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const visibleItems = visible.slice((pageNumber - 1) * PAGE_SIZE, pageNumber * PAGE_SIZE);
 
   const performAction = async (
     item: ContactRequest,
@@ -847,62 +812,90 @@ const ContactRequestsList: React.FC<ContactRequestsListProps> = ({
   };
 
   return (
-    <View className="flex-1 px-4 pt-4">
+    <View className="flex-1 px-4 pt-4 mt-10">
       <PageHeader title="Solicitudes de contacto" onBack={onBack} />
       <View className="mb-3 flex-row rounded-lg bg-blue-100 p-1">
-        <TabButton label="Recibidas" selected={activeTab === 'received'} onPress={() => setActiveTab('received')} />
-        <TabButton label="Enviadas" selected={activeTab === 'sent'} onPress={() => setActiveTab('sent')} />
+        <TabButton label="Recibidas" selected={activeTab === 'received'} onPress={() => {
+          setActiveTab('received');
+          setPageNumber(1);
+        }} />
+        <TabButton label="Enviadas" selected={activeTab === 'sent'} onPress={() => {
+          setActiveTab('sent');
+          setPageNumber(1);
+        }} />
       </View>
-      {loading ? <ActivityIndicator className="my-8" size="large" color="#2563eb" /> :
-        error ? <RetryMessage message={error} onRetry={() => void load()} /> :
-          visible.length === 0 ? (
-            <StateMessage message={`No tienes solicitudes ${activeTab === 'received' ? 'recibidas' : 'enviadas'}.`} />
-          ) : (
-            <FlatList
-              data={visible}
-              keyExtractor={(item) => String(item.id)}
-              renderItem={({ item }) => {
-                const pending = item.status === 'Pendiente';
-                return (
-                  <View className="mb-3 rounded-xl border border-gray-200 bg-white p-4">
-                    <Text className="font-bold text-gray-900">{item.foundItem.article}</Text>
-                    <Text className="my-1 text-sm text-gray-500">
-                      {activeTab === 'received' ? `Solicitante #${item.requesterId}` : 'Tu solicitud'}
-                      {' · '}{formatDate(item.createdAt)}
-                    </Text>
-                    <Text className="mb-3 text-sm text-gray-600">{item.status}</Text>
-                    {!readOnly && pending && (
-                      <View className="flex-row gap-3">
-                        {activeTab === 'received' ? (
-                          <>
-                            <PrimaryAction
-                              label={workingId === item.id ? '...' : 'Aceptar'}
-                              onPress={() => void performAction(item, 'accept')}
-                              disabled={workingId !== null}
-                            />
-                            <SecondaryAction
-                              label="Rechazar"
-                              onPress={() => void performAction(item, 'reject')}
-                              disabled={workingId !== null}
-                            />
-                          </>
-                        ) : (
-                          <SecondaryAction
-                            label={workingId === item.id ? '...' : 'Cancelar solicitud'}
-                            onPress={() => void performAction(item, 'cancel')}
-                            disabled={workingId !== null}
-                          />
-                        )}
-                      </View>
-                    )}
-                    {item.status === 'Aceptada' && (
-                      <PrimaryAction label="Ir al chat" onPress={() => onOpenConversation(item.id)} />
+      {loading ? (
+        <ActivityIndicator className="my-8" size="large" color="#2563eb" />
+      ) : (
+        <FlatList
+          data={error ? [] : visibleItems}
+          keyExtractor={(item) => String(item.id)}
+          alwaysBounceVertical
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={() => void load(true)} />
+          }
+          ListFooterComponent={
+            <PaginationControls
+              pageNumber={pageNumber}
+              totalPages={visiblePageCount}
+              onPageChange={setPageNumber}
+              disabled={refreshing}
+            />
+          }
+          ListHeaderComponent={
+            error ? <RetryMessage message={error} onRetry={() => void load()} /> : null
+          }
+          ListEmptyComponent={
+            error ? null : (
+              <StateMessage
+                message={`No tienes solicitudes ${
+                  activeTab === 'received' ? 'recibidas' : 'enviadas'
+                }.`}
+              />
+            )
+          }
+          renderItem={({ item }) => {
+            const pending = item.status === 'Pendiente';
+            return (
+              <View className="mb-3 rounded-xl border border-gray-200 bg-white p-4">
+                <Text className="font-bold text-gray-900">{item.foundItem.article}</Text>
+                <Text className="my-1 text-sm text-gray-500">
+                  {activeTab === 'received' ? `Solicitante #${item.requesterId}` : 'Tu solicitud'}
+                  {' · '}{formatDate(item.createdAt)}
+                </Text>
+                <Text className="mb-3 text-sm text-gray-600">{item.status}</Text>
+                {!readOnly && pending && (
+                  <View className="flex-row gap-3">
+                    {activeTab === 'received' ? (
+                      <>
+                        <PrimaryAction
+                          label={workingId === item.id ? '...' : 'Aceptar'}
+                          onPress={() => void performAction(item, 'accept')}
+                          disabled={workingId !== null}
+                        />
+                        <SecondaryAction
+                          label="Rechazar"
+                          onPress={() => void performAction(item, 'reject')}
+                          disabled={workingId !== null}
+                        />
+                      </>
+                    ) : (
+                      <SecondaryAction
+                        label={workingId === item.id ? '...' : 'Cancelar solicitud'}
+                        onPress={() => void performAction(item, 'cancel')}
+                        disabled={workingId !== null}
+                      />
                     )}
                   </View>
-                );
-              }}
-            />
-          )}
+                )}
+                {item.status === 'Aceptada' && (
+                  <PrimaryAction label="Ir al chat" onPress={() => onOpenConversation(item.id)} />
+                )}
+              </View>
+            );
+          }}
+        />
+      )}
     </View>
   );
 };
@@ -916,19 +909,26 @@ const NotificationsList: React.FC<NotificationsListProps> = ({ onBack, onOpen })
   const { accessToken } = useAuth();
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [pageNumber, setPageNumber] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (requestedPage = 1, refresh = false) => {
     if (!accessToken) return;
-    setLoading(true);
+    if (refresh) setRefreshing(true);
+    else setLoading(true);
     setError(null);
     try {
-      const result = await notificationsApi.getAll(accessToken);
+      const result = await notificationsApi.getAll(accessToken, requestedPage, PAGE_SIZE);
       setNotifications(result.items);
+      setPageNumber(result.pageNumber);
+      setTotalPages(result.totalPages);
     } catch (reason) {
       setError(messageFor(reason));
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, [accessToken]);
 
@@ -940,78 +940,63 @@ const NotificationsList: React.FC<NotificationsListProps> = ({ onBack, onOpen })
     if (!accessToken) return;
     try {
       await notificationsApi.markAllAsRead(accessToken);
-      await load();
+      await load(pageNumber);
     } catch (reason) {
       Alert.alert('No se pudieron marcar como leídas', messageFor(reason));
     }
   };
 
   return (
-    <View className="flex-1 px-4 pt-4">
+    <View className="flex-1 px-4 pt-4 mt-10">
       <PageHeader title="Notificaciones" onBack={onBack} />
       <TouchableOpacity className="mb-3 self-end" onPress={() => void markAllRead()}>
         <Text className="font-semibold text-blue-600">Marcar todas como leídas</Text>
       </TouchableOpacity>
-      {loading ? <ActivityIndicator className="my-8" size="large" color="#2563eb" /> :
-        error ? <RetryMessage message={error} onRetry={() => void load()} /> :
-          notifications.length === 0 ? (
-            <StateMessage message="No tienes notificaciones." />
-          ) : (
-            <FlatList
-              data={notifications}
-              keyExtractor={(item) => String(item.id)}
-              renderItem={({ item }) => (
-                <TouchableOpacity
-                  className={`mb-3 rounded-xl border border-gray-200 p-4 ${
-                    item.isRead ? 'bg-white' : 'bg-blue-50'
-                  }`}
-                  onPress={() => onOpen(item)}
-                  accessibilityRole="button"
-                >
-                  <Text className="font-bold text-gray-900">{item.title}</Text>
-                  <Text className="my-1 text-gray-600">{item.message}</Text>
-                  <Text className="text-xs text-gray-500">{formatDate(item.createdAt)}</Text>
-                </TouchableOpacity>
-              )}
+      {loading ? (
+        <ActivityIndicator className="my-8" size="large" color="#2563eb" />
+      ) : (
+        <FlatList
+          data={error ? [] : notifications}
+          keyExtractor={(item) => String(item.id)}
+          alwaysBounceVertical
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => void load(pageNumber, true)}
             />
+          }
+          ListFooterComponent={
+            <PaginationControls
+              pageNumber={pageNumber}
+              totalPages={totalPages}
+              onPageChange={(page) => void load(page)}
+              disabled={loading || refreshing}
+            />
+          }
+          ListHeaderComponent={
+            error ? (
+              <RetryMessage message={error} onRetry={() => void load(pageNumber)} />
+            ) : null
+          }
+          ListEmptyComponent={error ? null : <StateMessage message="No tienes notificaciones." />}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              className={`mb-3 rounded-xl border border-gray-200 p-4 ${
+                item.isRead ? 'bg-white' : 'bg-blue-50'
+              }`}
+              onPress={() => onOpen(item)}
+              accessibilityRole="button"
+            >
+              <Text className="font-bold text-gray-900">{item.title}</Text>
+              <Text className="my-1 text-gray-600">{item.message}</Text>
+              <Text className="text-xs text-gray-500">{formatDate(item.createdAt)}</Text>
+            </TouchableOpacity>
           )}
+        />
+      )}
     </View>
   );
 };
-
-const MatchObjectRow: React.FC<{ label: string; item: Match['lostItem'] }> = ({ label, item }) => (
-  <View className="mb-3 flex-row items-center">
-    {item.photoUrl ? (
-      <Image source={{ uri: item.photoUrl }} className="mr-3 h-14 w-14 rounded-lg bg-gray-100" />
-    ) : (
-      <View className="mr-3 h-14 w-14 items-center justify-center rounded-lg bg-gray-100">
-        <Text className="text-gray-400">Foto</Text>
-      </View>
-    )}
-    <View className="flex-1">
-      <Text className="text-xs text-gray-500">{label}</Text>
-      <Text className="font-semibold text-gray-900">{item.article}</Text>
-      <Text className="text-sm text-gray-500">{item.color} · {item.location}</Text>
-    </View>
-  </View>
-);
-
-const MatchObjectCard: React.FC<{ label: string; item: Match['lostItem'] }> = ({ label, item }) => (
-  <View className="flex-1 overflow-hidden rounded-lg border border-gray-100 bg-gray-50">
-    {item.photoUrl ? (
-      <Image source={{ uri: item.photoUrl }} className="h-24 w-full" resizeMode="cover" />
-    ) : (
-      <View className="h-24 items-center justify-center bg-gray-100">
-        <Text className="text-xs text-gray-400">Sin foto</Text>
-      </View>
-    )}
-    <View className="p-2">
-      <Text className="text-xs text-gray-500">{label}</Text>
-      <Text className="font-semibold text-gray-900" numberOfLines={1}>{item.article}</Text>
-      <Text className="text-xs text-gray-500" numberOfLines={1}>{item.color}</Text>
-    </View>
-  </View>
-);
 
 const PageHeader: React.FC<{ title: string; onBack: () => void }> = ({ title, onBack }) => (
   <View className="mb-4 flex-row items-center">
@@ -1090,6 +1075,14 @@ function numericUserId(id: string | undefined): number | null {
   if (id === undefined) return null;
   const parsed = Number(id);
   return Number.isInteger(parsed) ? parsed : null;
+}
+
+async function resolveConversationByMatchId(
+  matchId: number,
+  accessToken: string
+): Promise<Conversation | null> {
+  const conversations = await conversationsApi.getAll(accessToken);
+  return conversations.find((conversation) => conversation.matchId === matchId) ?? null;
 }
 
 function formatDate(value: string): string {
